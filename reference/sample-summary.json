@@ -1,0 +1,111 @@
+{
+  "source": "ngwerere_20191103.mp4",
+  "source_sha256": "25628c864ba3c65c36e5345101e9d12d2bdb494fa06ad1fb0759b65ec40eb488",
+  "site": "Ngwerere",
+  "calibration_sha256": "f3cce53e869593ffb349b9e7e928e1ee847d4e076836744befe58ed61f44390f",
+  "stage_m": 0.0,
+  "calibration_stage_used": true,
+  "calibration_stage_m": 0.0,
+  "calibration_elevation_m": 1182.2,
+  "frames": [
+    0,
+    125
+  ],
+  "dimensions_px": [
+    1920,
+    1080
+  ],
+  "nominal_fps": 30.0,
+  "request_discharge": true,
+  "alpha": 0.9,
+  "section_sha256": {
+    "ngwerere_cross_section": "c64a5f8dce9b09a355f5c6bc6f2973771b56e7eb1be91554d3b1a8a8eef5fd0b",
+    "ngwerere_cross_section_2": "bbb6a5411deccaa275e9430e09a5ec7e32f069f3197c62be31b1afe20649673f"
+  },
+  "alignment_confirmed": true,
+  "run": "f8dcc43c2cda42fcbdefadc9a9195190",
+  "pyopenrivercam": "0.9.6",
+  "time_s": [
+    0.0,
+    4.166666666666667
+  ],
+  "frame_pair_dt_s_min_max": [
+    0.03333333333333277,
+    0.0333333333333341
+  ],
+  "frame_pairs": 125,
+  "usable_area_fraction": 0.5636363636363636,
+  "quality_flags": [],
+  "discharge": {
+    "ngwerere_cross_section": {
+      "median_m3_s": 0.15699055943340323,
+      "wet_stations": 25,
+      "filled_wet_stations": 11,
+      "fill_method": "log_interp",
+      "first_xy_m": [
+        642732.215,
+        8304295.847
+      ],
+      "last_xy_m": [
+        642736.541,
+        8304295.046
+      ],
+      "bearing_deg_from_grid_north": 100.49005418606036
+    },
+    "ngwerere_cross_section_2": {
+      "median_m3_s": 0.17584608616528177,
+      "wet_stations": 22,
+      "filled_wet_stations": 9,
+      "fill_method": "log_interp",
+      "first_xy_m": [
+        642732.42,
+        8304297.063
+      ],
+      "last_xy_m": [
+        642736.166,
+        8304296.339
+      ],
+      "bearing_deg_from_grid_north": 100.93884338404226
+    }
+  },
+  "surface_speed_median_m_s": 0.2002317098489884,
+  "processing": {
+    "normalization_samples": 15,
+    "projection": "numpy",
+    "engine": "numba",
+    "resolution_m": 0.01,
+    "window_px": 25,
+    "masks": [
+      "corr",
+      "minmax",
+      "rolling",
+      "outliers",
+      "variance",
+      "count"
+    ],
+    "spatial_window": {
+      "wdw": 2,
+      "tolerance": 0.5,
+      "reduce_time": true
+    },
+    "stabilize": [
+      [
+        150,
+        0
+      ],
+      [
+        500,
+        1079
+      ],
+      [
+        1750,
+        1079
+      ],
+      [
+        900,
+        0
+      ]
+    ],
+    "transect_rolling": 4
+  }
+}
