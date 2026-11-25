@@ -143,6 +143,10 @@ def main():
     for flag in summary["quality_flags"]:
         st.warning(flag)
     st.image(str(run/"velocity.png"))
+    movie = run/"heatmap.mp4"
+    if movie.exists():
+        st.video(str(movie))
+        st.download_button("Download heatmap MP4",movie.read_bytes(),file_name=run.name+"-heatmap.mp4",mime="video/mp4")
     for label, section in summary["discharge"].items():
         st.metric(label, f'{section["median_m3_s"]:.5f} m³/s')
         st.caption(f'First-to-last grid bearing {section["bearing_deg_from_grid_north"]:.1f}° · logarithmic interpolation at {section["filled_wet_stations"]} of {section["wet_stations"]} wetted stations.')
@@ -154,4 +158,5 @@ try:
 except Exception as exc:
     st.session_state.pop("result",None)
     st.error(f"Measurement stopped. {type(exc).__name__}: {exc}")
+
 

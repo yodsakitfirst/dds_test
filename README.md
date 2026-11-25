@@ -31,7 +31,7 @@ Copy-Item .upstream/examples/ngwerere/ngwerere_20191103.mp4,.upstream/examples/n
 
 Verify HEAD is `dabc7140c21c4a515138609e100da0448e57fbe4`. The replay executes the calculation cells from notebooks 02–04 and skips presentation-only cells. It stages only the video, calibration and surveys. Fresh raw and masked NetCDF outputs are passed between calculation stages in a unique directory under `runs/`. The relaxed angle-mask call in notebook 03 returns a mask that the notebook discards. The app follows that effective filter sequence. Frame-pair timing comes from decoded presentation timestamps. Normalization, NumPy projection, default Numba PIV, four-step transect smoothing and gap filling follow the notebooks.
 
-Site data and uploaded clips live in `local/`. Each analysis writes its raw and filtered vectors, PNG map and JSON summary to a new directory in `runs/`. The UI downloads the PNG and JSON. Future RTSP capture belongs in `acquisition.py`: finish writing a timestamped clip, then pass its path through the same preview, calibration and analysis workflow.
+Site data and uploaded clips live in `local/`. Each analysis writes its raw and filtered vectors, PNG map and JSON summary to a new directory in `runs/`. The UI offers PNG, JSON and synchronized MP4 downloads. See the live dashboard instructions below for RTSP capture.
 
 ## Observed Ngwerere run
 
@@ -52,3 +52,12 @@ The browser-downloaded [map](reference/sample-velocity.png) and [run summary](re
 ```
 
 The end-to-end Edge check passed. Uploading the identical MP4 as `renamed-river.mp4` in velocity-only mode produced an identical PNG. Changing the selection to frames 0–124 and clearing the surveys produced a fresh run with 59.14% coverage, a missing-survey message and a downloadable velocity map. The UI rejected an unreadable MP4 and a calibration declaring 640 × 1080 for the 1920 × 1080 sample. Both errors hid prior results.
+
+## Video heatmaps and live dashboard
+
+After **Analyze recording**, use **Download heatmap MP4** to save the synchronized camera view. Each frame after the first shows the filtered surface speeds for the pair ending on that frame. The colour scale stays fixed throughout the clip and saturates at the 99th percentile of valid speeds. Untracked locations show the camera image. Arrow direction follows motion in the camera view, and colour indicates speed. For the bundled Ngwerere clip at its calibration stage, a manually traced water outline limits the arrows to the visible channel. It affects the display only. Other camera views use their calibrated area.
+
+Open **Live heatmap** in the sidebar for a paced MP4 or an RTSP camera. Import a new camera calibration on the main page first. Select the matching site, enter stage, confirm the view, and choose **Start live heatmap**. Use **Stop and save MP4**, or let the capture duration expire, then download the recording. The RTSP camera must be reachable from the machine hosting Streamlit and provide increasing presentation timestamps. The capture URL is used for the connection and is omitted from exports.
+
+Live mode estimates provisional speed using phase correlation on a coarser rectified grid, rejecting low texture, weak correlation and large ambiguous displacements. The viewer displays the newest adjacent pair available and may skip updates to keep latency down. It uses source timestamps for speeds and export timing. The offline MP4 uses the full-clip pyOpenRiverCam filters and stabilization. RTSP capture currently exports the live speed overlay only. Update an existing installation with `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` to install the H.264 encoder.
+

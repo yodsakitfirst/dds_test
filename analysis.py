@@ -94,6 +94,12 @@ def analyze(clip, config, settings, sections, progress):
                         spatial_window=dict(wdw=2,tolerance=.5,reduce_time=True),
                         stabilize=video.stabilize if isinstance(video.stabilize,list) else (STABILIZE if stabilized else None),
                         transect_rolling=4))
+    progress("Rendering synchronized heatmap MP4")
+    try:
+        from heatmap import filtered_movie
+        filtered_movie(video, ds, times, level, run/"heatmap.mp4")
+    except Exception as exc:
+        flags.append(f"Heatmap video export unavailable: {exc}")
     progress("Checking surveyed sections and writing exports")
     if settings["request_discharge"] and not sections:
         flags.append("Supply a bank-to-bank x,y,z CSV and confirm its image alignment for discharge.")
@@ -104,3 +110,4 @@ def analyze(clip, config, settings, sections, progress):
             flags.append(f"{name}: {exc}")
     (run/"summary.json").write_text(json.dumps(summary,indent=2,allow_nan=False),encoding="utf8")
     return run
+

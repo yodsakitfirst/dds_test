@@ -79,3 +79,4 @@ tzdata==2026.6
 urllib3==2.8.0
 watchdog==6.0.0
 xarray==2026.9.0
+av==16.1.0
