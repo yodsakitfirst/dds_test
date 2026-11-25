@@ -9,10 +9,11 @@ import streamlit as st
 from acquisition import LOCAL, ROOT, SAMPLE, save_content
 from analysis import STABILIZE
 from live import LiveRun
+from line_editor import draw_lines
 
 st.set_page_config(page_title="Live heatmap",layout="wide")
 st.title("Live heatmap")
-st.caption("Camera-view surface speed from adjacent frames. Arrows follow the tracked motion in the camera view. Their colour shows provisional speed in m/s. Keep the camera fixed.")
+st.caption("Arrows show surface motion supported across recent frame pairs. Bold arrows show velocity across the selected section lines. Colour indicates speed in m/s. Keep the camera fixed.")
 job = st.session_state.get("live_run")
 busy = job is not None and not job.done
 
@@ -29,7 +30,7 @@ def monitor(job):
         if snapshot is not None and snapshot is not last:
             image,t,coverage,dt = snapshot
             player.image(image)
-            status.caption(f"{t:.1f} s elapsed · {coverage:.0%} of grid cells tracked · frame-pair interval {dt*1000:.1f} ms")
+            status.caption(f"{t:.1f} s elapsed · {coverage:.0%} of visible grid cells tracked · frame-pair interval {dt*1000:.1f} ms")
             last = snapshot
         # Yield regularly so Stop and navigation work during a slow connection.
         st.session_state.get("live_run")
@@ -66,17 +67,19 @@ else:
     if site and source:
         cfg = pyorc.load_camera_config(str(sites[site]))
         stage = st.number_input("Recording-time gauge stage (m)",value=0.0 if mode=="Ngwerere sample" else None)
-        maximum = st.number_input("Colour scale maximum (m/s)",.1,20.,1.)
+        maximum = st.number_input("Colour scale maximum (m/s)",.1,20.,0.6)
         duration = st.number_input("Capture duration (seconds)",1,900,10)
+        custom = st.checkbox("Draw my own section lines")
+        drawn_lines = draw_lines(source, network, cfg, site) if custom else None
         confirmed = st.checkbox("The camera view matches this calibration")
-        if st.button("Start live heatmap",disabled=not confirmed or stage is None):
+        if st.button("Start live heatmap",disabled=not confirmed or stage is None or (custom and not drawn_lines)):
             folder = ROOT/"runs"/uuid4().hex
             folder.mkdir(parents=True)
             job = LiveRun()
             st.session_state.live_run = job
             polygon = STABILIZE if site=="Ngwerere" else cfg.stabilize
             Thread(target=job.process,args=(source,network,cfg,stage,maximum,duration,
-                   folder/"live-heatmap.mp4",polygon),daemon=True).start()
+                   folder/"live-heatmap.mp4",polygon,drawn_lines),daemon=True).start()
             st.rerun()
 
 

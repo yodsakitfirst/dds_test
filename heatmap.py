@@ -49,6 +49,60 @@ class VectorOverlay:
         self.palette = cv2.applyColorMap(np.arange(256,dtype=np.uint8)[:,None],
                                          cv2.COLORMAP_TURBO).reshape(-1,3)
 
+    def paint_flow(self, frame, vectors, maximum, sections, rows, cols):
+        """Draw the rolling field and measured section-normal velocities."""
+        output = frame.copy()
+        height, width = frame.shape[:2]
+
+        def arrow(origin, motion, speed, thickness):
+            if not np.isfinite(motion).all() or np.linalg.norm(motion) < 2:
+                return
+            color = self.palette[int(255 * np.clip(speed / maximum, 0, 1))].tolist()
+            start = tuple(np.rint(origin).astype(int))
+            end = tuple(np.rint(origin + motion).astype(int))
+            cv2.arrowedLine(output, start, end, color, thickness, cv2.LINE_AA, tipLength=.18)
+
+        vx, vy = vectors[..., 0], vectors[..., 1]
+        motion = self.col * vx[..., None] + self.row * vy[..., None]
+        for i, j in zip(*np.where(self.visible & np.isfinite(vx))):
+            arrow(self.centers[i, j], .55 * motion[i, j], np.hypot(vx[i,j], vy[i,j]), 1)
+        if self.mask is not None:
+            cv2.copyTo(frame, cv2.bitwise_not(self.mask), output)
+        cv2.addWeighted(output, .58, frame, .42, 0, output)
+
+        for grid, normals, uv, wet in sections:
+            if np.isfinite(uv).all():
+                cv2.polylines(output, [np.int32(np.rint(uv))], False, (240,165,20), 3, cv2.LINE_AA)
+            for (x, y), normal, origin, submerged in zip(grid, normals, uv, wet):
+                if not submerged or not np.isfinite(origin).all():
+                    continue
+                i = int(np.argmin(abs(rows - y)))
+                j = int(np.argmin(abs(cols - x)))
+                if abs(rows[i]-y) > rows[1]-rows[0] or abs(cols[j]-x) > cols[1]-cols[0]:
+                    continue
+                # Use only supported neighbouring measurements at this station.
+                patch = vectors[max(0,i-1):i+2, max(0,j-1):j+2].reshape(-1, 2)
+                valid = patch[np.isfinite(patch).all(axis=1)]
+                if len(valid) < 3:
+                    continue
+                component = float(np.median(valid @ normal))
+                direction = self.col[i,j]*normal[0] + self.row[i,j]*normal[1]
+                arrow(origin, direction*component, abs(component), max(2, width//550))
+
+        length, bar = min(250, height//3), max(12, width//80)
+        x, bottom = max(16, width//24), height-height//18
+        for pos in range(length):
+            color = self.palette[round(255*pos/max(1,length-1))].tolist()
+            cv2.line(output,(x,bottom-pos),(x+bar,bottom-pos),color,1)
+        for fraction in np.linspace(0,1,7):
+            y = bottom - round(fraction*length)
+            label = f"{fraction*maximum:.2f}"
+            for color, thickness in [((20,20,20), 4), ((255,255,255), 1)]:
+                cv2.putText(output,label,(x+bar+6,y+5),cv2.FONT_HERSHEY_SIMPLEX,.65,color,thickness,cv2.LINE_AA)
+        for color, thickness in [((20,20,20), 4), ((255,255,255), 1)]:
+            cv2.putText(output,"m/s",(x,bottom+24),cv2.FONT_HERSHEY_SIMPLEX,.65,color,thickness,cv2.LINE_AA)
+        return output
+
     def paint(self, frame, vx, vy, maximum):
         output = frame.copy()
         speed = np.hypot(vx,vy)

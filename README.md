@@ -2,6 +2,22 @@
 
 A local Streamlit workbench for calibrated MP4 surface velocimetry and surveyed discharge. The four Ngwerere sample files are included.
 
+## Test live processing with an MP4
+
+From a Python 3.12 environment with the requirements installed, replay the bundled Ngwerere MP4 at camera speed:
+
+```sh
+python replay.py
+```
+
+The replay prints elapsed video time and tracking coverage, then saves the timestamped overlay to a fresh `runs/<id>/live-heatmap.mp4`. It defaults to ten seconds and uses the same adjacent-frame estimator as the **Live heatmap** dashboard. For your own fixed-camera recording, supply the matching calibration and gauge stage:
+
+```sh
+python replay.py river.mp4 --camera site-camera.json --stage 0.42 --seconds 30
+```
+
+For a live visual preview, launch `python -m streamlit run app.py`, open **Live heatmap**, select **Ngwerere sample**, confirm the camera view, and click **Start live heatmap**.
+
 ## Run on Windows
 
 From this folder, using PowerShell and 64-bit Python 3.12:
@@ -57,7 +73,7 @@ The end-to-end Edge check passed. Uploading the identical MP4 as `renamed-river.
 
 After **Analyze recording**, use **Download heatmap MP4** to save the synchronized camera view. Each frame after the first shows the filtered surface speeds for the pair ending on that frame. The colour scale stays fixed throughout the clip and saturates at the 99th percentile of valid speeds. Untracked locations show the camera image. Arrow direction follows motion in the camera view, and colour indicates speed. For the bundled Ngwerere clip at its calibration stage, a manually traced water outline limits the arrows to the visible channel. It affects the display only. Other camera views use their calibrated area.
 
-Open **Live heatmap** in the sidebar for a paced MP4 or an RTSP camera. Import a new camera calibration on the main page first. Select the matching site, enter stage, confirm the view, and choose **Start live heatmap**. Use **Stop and save MP4**, or let the capture duration expire, then download the recording. The RTSP camera must be reachable from the machine hosting Streamlit and provide increasing presentation timestamps. The capture URL is used for the connection and is omitted from exports.
+Open **Live heatmap** in the sidebar for a paced MP4 or an RTSP camera. Import a new camera calibration on the main page first. Select the matching site, enter stage, confirm the view, and choose **Start live heatmap**. To place your own sections, select **Draw my own section lines** before starting. Drag on the camera image or click two endpoints for each straight line. Use **Undo** or **Clear** to redraw. These lines replace the sample surveys in the live overlay and export. Their arrows show the component of measured surface velocity crossing each line. Use **Stop and save MP4**, or let the capture duration expire, then download the recording. The RTSP camera must be reachable from the machine hosting Streamlit and provide increasing presentation timestamps. The capture URL is used for the connection and is omitted from exports.
 
-Live mode estimates provisional speed using phase correlation on a coarser rectified grid, rejecting low texture, weak correlation and large ambiguous displacements. The viewer displays the newest adjacent pair available and may skip updates to keep latency down. It uses source timestamps for speeds and export timing. The offline MP4 uses the full-clip pyOpenRiverCam filters and stabilization. RTSP capture currently exports the live speed overlay only. Update an existing installation with `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` to install the H.264 encoder.
+Live mode subtracts a running background and measures patch displacement by normalized cross-correlation on overlapping rectified windows. The display uses the median velocity from up to 12 recent updates and suppresses cells without repeated directional agreement. The first few frames therefore have no velocity arrows. For the bundled sample, the two blue lines follow the surveyed sections and bold arrows show the measured section-normal velocity at supported wet stations. The live colour scale defaults to 0–0.6 m/s. The viewer displays the newest adjacent pair available and may skip updates to keep latency down. It uses source timestamps for speeds and export timing. The offline MP4 uses the full-clip pyOpenRiverCam filters and stabilization. RTSP capture currently exports the live speed overlay only. Update an existing installation with `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` to install the H.264 encoder.
 

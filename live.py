@@ -1,5 +1,7 @@
 """Low-latency calibrated window correlation and paced file/RTSP acquisition."""
+from collections import deque
 from contextlib import contextmanager
+import warnings
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 from time import monotonic
@@ -72,10 +74,10 @@ def latest_pairs(source, network):
 
 
 class LiveField:
-    def __init__(self,cfg,level,outline=None):
+    def __init__(self,cfg,level,outline=None,sections=(),drawn_lines=()):
         # Coarsen large grids for a responsive preview while keeping metric scale.
         rows,cols = cfg.shape
-        stride = max(1,int(np.ceil(max(rows,cols)/420)))
+        stride = max(1,int(np.ceil(max(rows,cols)/850)))
         self.resolution = cfg.resolution*stride
         row,col = np.indices(((rows+stride-1)//stride,(cols+stride-1)//stride))
         xs,ys = cfg.transform*((col+.5)*stride,(row+.5)*stride)
@@ -86,7 +88,7 @@ class LiveField:
         # Inside these windows both images must contain calibrated source pixels.
         valid = np.isfinite(u+v) & (u>=1) & (v>=1) & (u<cfg.width-1) & (v<cfg.height-1)
         self.window = max(12,int(round(cfg.window_size/stride)))
-        step = self.window
+        step = max(6, self.window // 2)
         self.rows = np.arange(step//2, row.shape[0]-step//2, step)
         self.cols = np.arange(step//2, col.shape[1]-step//2, step)
         if not len(self.rows) or not len(self.cols):
@@ -97,25 +99,87 @@ class LiveField:
         self.overlay = VectorOverlay(u[centers],v[centers],step*self.resolution,
                                      step*self.resolution,self.shape,outline)
         self.valid = valid
-        self.hann = cv2.createHanningWindow((step,step),cv2.CV_32F)
+        self.background = None
+        self.history = deque(maxlen=12)
+        self.sections = []
+        water_z = cfg.get_z_a(level)
+        profiles = [(xyz[:, :2], xyz[:, 2] < water_z) for xyz in sections]
+        for line in drawn_lines:
+            ends = np.asarray(line, dtype=float)
+            if ends.shape != (2, 2) or not np.isfinite(ends).all() or ((ends < 0) | (ends > 1)).any():
+                raise ValueError("Line endpoints must be inside the camera image.")
+            ends *= [cfg.width-1, cfg.height-1]
+            length = np.linalg.norm(ends[1]-ends[0])
+            if length < 1:
+                raise ValueError("Choose two distinct endpoints.")
+            points = np.linspace(*ends, max(2, int(length / 25) + 1))
+            world = cfg.unproject_points(points.tolist(), float(water_z))
+            if not np.isfinite(world).all():
+                raise ValueError("The drawn line cannot be projected onto the water surface.")
+            profiles.append((world[:, :2], np.ones(len(world), dtype=bool)))
+        for coords, wet in profiles:
+            # Station positions on the water plane and normal to the surveyed line.
+            c, r = (~cfg.transform) * (coords[:, 0], coords[:, 1])
+            grid = np.column_stack((c, r)) / stride - .5
+            tangent = np.gradient(grid, axis=0)
+            normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+            normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
+            xy = np.column_stack((coords, np.full(len(coords), water_z)))
+            uv = np.asarray(cfg.project_points(xy.tolist()))
+            self.sections.append((grid, normal, uv, wet))
 
     def measure(self, prev, current, dt, maximum):
         if prev.shape[:2]!=self.shape or current.shape[:2]!=self.shape:
             raise ValueError("Camera resolution differs from the selected calibration.")
         a,b = [cv2.remap(cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY),*self.maps,
                           cv2.INTER_LINEAR).astype("float32") for frame in (prev,current)]
-        vx = np.full((len(self.rows),len(self.cols)),np.nan)
-        vy = np.full_like(vx,np.nan)
-        for i,y in enumerate(self.rows):
-            for j,x in enumerate(self.cols):
-                top,left = y-self.window//2,x-self.window//2
-                sl = np.s_[top:top+self.window,left:left+self.window]
-                if not self.valid[sl].all() or min(a[sl].std(),b[sl].std())<3:
+        if self.background is None:
+            self.background = (a + b) * .5
+        # Remove stationary bed detail before measuring the moving surface texture.
+        prev_signal = a - self.background
+        curr_signal = b - self.background
+        cv2.accumulateWeighted((a + b) * .5, self.background, .12)
+        velocities = np.full((len(self.rows), len(self.cols), 2), np.nan)
+        half = self.window // 2
+        margin = max(3, half // 2)
+        for i, y in enumerate(self.rows):
+            for j, x in enumerate(self.cols):
+                if not self.overlay.visible[i, j]:
                     continue
-                shift,score = cv2.phaseCorrelate(a[sl].copy(),b[sl].copy(),self.hann)
-                if score >= .4 and max(map(abs,shift))<self.window/4:
-                    vx[i,j],vy[i,j] = np.asarray(shift)*self.resolution/dt
-        return self.overlay.paint(current,vx,vy,maximum),float(np.isfinite(vx).mean())
+                radius = half + margin
+                if y < radius or x < radius or y+radius > a.shape[0] or x+radius > a.shape[1]:
+                    continue
+                region = np.s_[y-radius:y+radius, x-radius:x+radius]
+                template = prev_signal[y-half:y+half, x-half:x+half]
+                if not self.valid[region].all() or template.std() < 2:
+                    continue
+                corr = cv2.matchTemplate(curr_signal[region], template, cv2.TM_CCOEFF_NORMED)
+                _, score, _, (cx, cy) = cv2.minMaxLoc(corr)
+                if score < .5 or min(cx, cy) == 0 or max(cx, cy) >= margin*2:
+                    continue
+                dx = _peak_offset(*corr[cy, cx-1:cx+2])
+                dy = _peak_offset(*corr[cy-1:cy+2, cx])
+                velocities[i, j] = (np.array([cx+dx, cy+dy])-margin)*self.resolution/dt
+
+        self.history.append(velocities)
+        history = np.stack(self.history)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+            median = np.nanmedian(history, axis=0)
+        # At least three observations agreeing to within 60 degrees of the median.
+        speed = np.linalg.norm(median, axis=-1)
+        agreement = (history*median).sum(axis=-1) > .5*np.linalg.norm(history, axis=-1)*speed
+        count = np.isfinite(history[..., 0]).sum(axis=0)
+        median[(agreement.sum(axis=0) < np.maximum(3, .65*count)) | (speed < .025)] = np.nan
+        image = self.overlay.paint_flow(current, median, maximum, self.sections, self.rows, self.cols)
+        coverage = np.isfinite(median[..., 0]).sum() / max(1, self.overlay.visible.sum())
+        return image, float(coverage)
+
+
+def _peak_offset(left, center, right):
+    curvature = left - 2*center + right
+    return .5*(left-right)/curvature if curvature < -1e-6 else 0.
+
 
 class Stabilizer:
     """Register frames to static landmarks outside the configured water polygon."""
@@ -139,6 +203,38 @@ class Stabilizer:
         return cv2.warpAffine(frame,matrix,(gray.shape[1],gray.shape[0]))
 
 
+def replay_frames(source, network, cfg, stage, maximum, duration, polygon, should_stop, drawn_lines=None):
+    """Yield measured frames paced by source timestamps for display or export."""
+    from acquisition import SAMPLE
+    outline = sample_outline(source, stage)
+    sections = []
+    # Surveys belong to this specific recording/site; use them at any gauge stage.
+    if drawn_lines is None and sample_outline(source, 0) is not None:
+        from analysis import survey
+        sections = [survey(path) for path in sorted(SAMPLE.glob("*.csv"))]
+    field = LiveField(cfg, stage, outline, sections, drawn_lines or ())
+    first = last = None
+    stabilizer = None
+    with latest_pairs(source, network) as pairs:
+        for prev, current, dt, stamp in pairs:
+            if should_stop():
+                break
+            if first is None:
+                first = stamp
+            if stamp - first >= duration:
+                break
+            if last is not None and stamp - last < .12:
+                continue
+            a, b = (frame.to_ndarray(format="bgr24") for frame in (prev, current))
+            if polygon is not None and stabilizer is None:
+                stabilizer = Stabilizer(a, polygon)
+            if stabilizer is not None:
+                a, b = stabilizer.apply(a), stabilizer.apply(b)
+            image, coverage = field.measure(a, b, dt, maximum)
+            last = stamp
+            yield image, stamp - first, coverage, dt
+
+
 class LiveRun:
     def __init__(self):
         self.stop = Event()
@@ -148,34 +244,22 @@ class LiveRun:
         self.error = None
         self.export = None
 
-    def process(self,source,network,cfg,stage,maximum,duration,path,polygon):
+    def process(self,source,network,cfg,stage,maximum,duration,path,polygon,drawn_lines=None):
         from heatmap import mp4_writer
         try:
-            field = LiveField(cfg,stage,sample_outline(source,stage))
-            first = stabilizer = None
-            with latest_pairs(source,network) as pairs, mp4_writer(path,8) as write:
-                for prev,current,dt,stamp in pairs:
-                    if self.stop.is_set() or monotonic()-self.seen>20:
-                        break
-                    if first is not None and stamp-first >= duration:
-                        break
-                    if first is not None and stamp-last<.12:
-                        continue
-                    a,b = (f.to_ndarray(format="bgr24") for f in (prev,current))
-                    if first is None:
-                        first = stamp
-                        if polygon is not None:
-                            stabilizer = Stabilizer(a,polygon)
-                    if stabilizer is not None:
-                        a,b = stabilizer.apply(a),stabilizer.apply(b)
-                    image,coverage = field.measure(a,b,dt,maximum)
-                    write(image,stamp-first)
-                    w = min(image.shape[1],960)
-                    thumb = cv2.resize(image,(w,round(image.shape[0]*w/image.shape[1])))
-                    ok,jpeg = cv2.imencode(".jpg",thumb)
+            def should_stop():
+                return self.stop.is_set() or monotonic() - self.seen > 20
+
+            with mp4_writer(path, 8) as write:
+                for image, elapsed, coverage, dt in replay_frames(
+                    source, network, cfg, stage, maximum, duration, polygon, should_stop, drawn_lines
+                ):
+                    write(image, elapsed)
+                    w = min(image.shape[1], 960)
+                    thumb = cv2.resize(image, (w, round(image.shape[0] * w / image.shape[1])))
+                    ok, jpeg = cv2.imencode(".jpg", thumb)
                     if ok:
-                        self.snapshot = jpeg.tobytes(),stamp-first,coverage,dt
-                    last = stamp
+                        self.snapshot = jpeg.tobytes(), elapsed, coverage, dt
             self.export = path
         except Exception as exc:
             self.error = str(exc)

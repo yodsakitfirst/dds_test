@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box }
+  body { margin: 0; color: #263831; font: 15px system-ui, sans-serif }
+  #editor { max-width: 900px }
+  canvas { width: 100%; height: auto; display: block; border-radius: 6px; cursor: crosshair; touch-action: none }
+  footer { display: flex; align-items: center; gap: 10px; padding: 8px 0; flex-wrap: wrap }
+  button { background: white; border: 1px solid #87988f; border-radius: 5px; padding: 5px 12px; cursor: pointer }
+  button:disabled { opacity: .5 }
+  #status { color: var(--text, #263831) }
+</style>
+<div id="editor">
+  <canvas aria-label="Camera image for drawing section lines"></canvas>
+  <footer><button id="undo">Undo</button><button id="clear">Clear</button><span id="status" aria-live="polite"></span></footer>
+</div>
+<script>
+const canvas = document.querySelector("canvas"), ctx = canvas.getContext("2d");
+const photo = new Image();
+let lines = [], start = null, hover = null, press = null, source = null;
+function send(type, fields = {}) {
+  parent.postMessage({isStreamlitMessage: true, type: "streamlit:" + type, ...fields}, "*");
+}
+function resize() { send("setFrameHeight", {height: document.body.scrollHeight}); }
+new ResizeObserver(resize).observe(document.querySelector("#editor"));
+function drawLine(a, b) {
+  ctx.beginPath();
+  ctx.moveTo(a[0]*canvas.width, a[1]*canvas.height);
+  ctx.lineTo(b[0]*canvas.width, b[1]*canvas.height);
+  ctx.strokeStyle = "#00c8ff"; ctx.lineWidth = 3; ctx.stroke();
+  for (const p of [a,b]) {
+    ctx.beginPath(); ctx.arc(p[0]*canvas.width,p[1]*canvas.height,4,0,2*Math.PI);
+    ctx.fillStyle = "white"; ctx.fill(); ctx.stroke();
+  }
+}
+function paint() {
+  if (photo.complete && photo.naturalWidth) ctx.drawImage(photo,0,0,canvas.width,canvas.height);
+  for (const [a,b] of lines) drawLine(a,b);
+  if (start) drawLine(start,hover || start);
+  document.querySelector("#status").textContent = start ? "Choose the second endpoint" : lines.length + (lines.length === 1 ? " line" : " lines");
+  document.querySelector("#undo").disabled = document.querySelector("#clear").disabled = !start && !lines.length;
+}
+function point(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height].map(n=>Math.max(0,Math.min(1,n)));
+}
+function distance(a,b) { return Math.hypot((a[0]-b[0])*canvas.width,(a[1]-b[1])*canvas.height); }
+function publish() {
+  start = hover = press = null;
+  paint();
+  send("setComponentValue", {value: lines, dataType:"json"});
+}
+canvas.onpointerdown = e => {
+  if (!e.isPrimary || e.button !== 0) return;
+  press = point(e); start ??= press; hover = press;
+  canvas.setPointerCapture(e.pointerId); paint();
+};
+canvas.onpointermove = e => { if (start && e.isPrimary) { hover = point(e); paint(); } };
+canvas.onpointerup = e => {
+  if (!press || !e.isPrimary) return;
+  const end = point(e); press = null;
+  if (distance(start,end) >= 4) { lines.push([start,end]); publish(); }
+};
+canvas.onpointercancel = () => { start = press = hover = null; paint(); };
+document.querySelector("#undo").onclick = () => { if (!start) lines.pop(); publish(); };
+document.querySelector("#clear").onclick = () => { lines = []; publish(); };
+photo.onload = () => { canvas.width = photo.naturalWidth; canvas.height = photo.naturalHeight; paint(); resize(); };
+window.addEventListener("message", e => {
+  if (e.source !== parent || e.data.type !== "streamlit:render") return;
+  document.body.style.setProperty("--text", e.data.theme?.textColor || "#263831");
+  const args = e.data.args;
+  if (source !== args.image) {
+    lines = args.initial || []; start = hover = press = null;
+    source = args.image; photo.src = "data:image/jpeg;base64," + source;
+  }
+});
+send("componentReady", {apiVersion:1});
+</script>
