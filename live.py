@@ -74,20 +74,25 @@ def latest_pairs(source, network):
 
 
 class LiveField:
-    def __init__(self,cfg,level,outline=None,sections=(),drawn_lines=()):
-        # Coarsen large grids for a responsive preview while keeping metric scale.
-        rows,cols = cfg.shape
-        stride = max(1,int(np.ceil(max(rows,cols)/850)))
-        self.resolution = cfg.resolution*stride
-        row,col = np.indices(((rows+stride-1)//stride,(cols+stride-1)//stride))
-        xs,ys = cfg.transform*((col+.5)*stride,(row+.5)*stride)
-        z = np.full(xs.shape,cfg.get_z_a(level))
-        u,v = cfg.project_grid(xs,ys,z)
-        self.maps = u.astype("float32"),v.astype("float32")
-        self.shape = cfg.height,cfg.width
-        # Inside these windows both images must contain calibrated source pixels.
-        valid = np.isfinite(u+v) & (u>=1) & (v>=1) & (u<cfg.width-1) & (v<cfg.height-1)
-        self.window = max(12,int(round(cfg.window_size/stride)))
+    def __init__(self,cfg,level,outline=None,sections=(),drawn_lines=(),frame_shape=None):
+        self.pixel_mode = cfg is None
+        self.shape = frame_shape if self.pixel_mode else (cfg.height, cfg.width)
+        height, width = self.shape
+        rows, cols = self.shape if self.pixel_mode else cfg.shape
+        stride = max(1, int(np.ceil(max(rows, cols) / 850)))
+        row, col = np.indices(((rows+stride-1)//stride, (cols+stride-1)//stride))
+        if self.pixel_mode:
+            u, v = col*stride, row*stride
+            self.resolution = stride  # Original video pixels per tracking pixel.
+            self.window = 24
+        else:
+            xs, ys = cfg.transform * ((col+.5)*stride, (row+.5)*stride)
+            z = np.full(xs.shape, cfg.get_z_a(level))
+            u, v = cfg.project_grid(xs, ys, z)
+            self.resolution = cfg.resolution*stride
+            self.window = max(12, int(round(cfg.window_size/stride)))
+        self.maps = u.astype("float32"), v.astype("float32")
+        valid = np.isfinite(u+v) & (u>=1) & (v>=1) & (u<width-1) & (v<height-1)
         step = max(6, self.window // 2)
         self.rows = np.arange(step//2, row.shape[0]-step//2, step)
         self.cols = np.arange(step//2, col.shape[1]-step//2, step)
@@ -102,17 +107,20 @@ class LiveField:
         self.background = None
         self.history = deque(maxlen=12)
         self.sections = []
-        water_z = cfg.get_z_a(level)
+        water_z = None if self.pixel_mode else cfg.get_z_a(level)
         profiles = [(xyz[:, :2], xyz[:, 2] < water_z) for xyz in sections]
         for line in drawn_lines:
             ends = np.asarray(line, dtype=float)
             if ends.shape != (2, 2) or not np.isfinite(ends).all() or ((ends < 0) | (ends > 1)).any():
                 raise ValueError("Line endpoints must be inside the camera image.")
-            ends *= [cfg.width-1, cfg.height-1]
+            ends *= [width-1, height-1]
             length = np.linalg.norm(ends[1]-ends[0])
             if length < 1:
                 raise ValueError("Choose two distinct endpoints.")
             points = np.linspace(*ends, max(2, int(length / 25) + 1))
+            if self.pixel_mode:
+                self.add_section(points / stride, points, np.ones(len(points), dtype=bool))
+                continue
             world = cfg.unproject_points(points.tolist(), float(water_z))
             if not np.isfinite(world).all():
                 raise ValueError("The drawn line cannot be projected onto the water surface.")
@@ -121,12 +129,15 @@ class LiveField:
             # Station positions on the water plane and normal to the surveyed line.
             c, r = (~cfg.transform) * (coords[:, 0], coords[:, 1])
             grid = np.column_stack((c, r)) / stride - .5
-            tangent = np.gradient(grid, axis=0)
-            normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
-            normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
             xy = np.column_stack((coords, np.full(len(coords), water_z)))
             uv = np.asarray(cfg.project_points(xy.tolist()))
-            self.sections.append((grid, normal, uv, wet))
+            self.add_section(grid, uv, wet)
+
+    def add_section(self, grid, uv, wet):
+        tangent = np.gradient(grid, axis=0)
+        normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+        normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
+        self.sections.append((grid, normal, uv, wet))
 
     def measure(self, prev, current, dt, maximum):
         if prev.shape[:2]!=self.shape or current.shape[:2]!=self.shape:
@@ -171,7 +182,8 @@ class LiveField:
         agreement = (history*median).sum(axis=-1) > .5*np.linalg.norm(history, axis=-1)*speed
         count = np.isfinite(history[..., 0]).sum(axis=0)
         median[(agreement.sum(axis=0) < np.maximum(3, .65*count)) | (speed < .025)] = np.nan
-        image = self.overlay.paint_flow(current, median, maximum, self.sections, self.rows, self.cols)
+        image = self.overlay.paint_flow(current, median, maximum, self.sections, self.rows, self.cols,
+                                        unit="px/s" if self.pixel_mode else "m/s")
         coverage = np.isfinite(median[..., 0]).sum() / max(1, self.overlay.visible.sum())
         return image, float(coverage)
 
@@ -209,10 +221,10 @@ def replay_frames(source, network, cfg, stage, maximum, duration, polygon, shoul
     outline = sample_outline(source, stage)
     sections = []
     # Surveys belong to this specific recording/site; use them at any gauge stage.
-    if drawn_lines is None and sample_outline(source, 0) is not None:
+    if cfg is not None and drawn_lines is None and sample_outline(source, 0) is not None:
         from analysis import survey
         sections = [survey(path) for path in sorted(SAMPLE.glob("*.csv"))]
-    field = LiveField(cfg, stage, outline, sections, drawn_lines or ())
+    field = None
     first = last = None
     stabilizer = None
     with latest_pairs(source, network) as pairs:
@@ -226,6 +238,9 @@ def replay_frames(source, network, cfg, stage, maximum, duration, polygon, shoul
             if last is not None and stamp - last < .12:
                 continue
             a, b = (frame.to_ndarray(format="bgr24") for frame in (prev, current))
+            if field is None:
+                field = LiveField(cfg, stage, outline if cfg is not None else None, sections,
+                                  drawn_lines or (), frame_shape=a.shape[:2])
             if polygon is not None and stabilizer is None:
                 stabilizer = Stabilizer(a, polygon)
             if stabilizer is not None:

@@ -22,7 +22,7 @@ def draw_lines(source, network, cfg, site):
             with av.open(str(source), options={"rtsp_transport": "tcp"} if network else {},
                          timeout=(6, 5)) as media:
                 frame = next(media.decode(video=0)).to_image()
-            if frame.size != (cfg.width, cfg.height):
+            if cfg is not None and frame.size != (cfg.width, cfg.height):
                 st.error("Select a calibration matching the camera image dimensions.")
                 return []
             frame.thumbnail((960, 720))

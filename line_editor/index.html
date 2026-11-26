@@ -5,19 +5,21 @@
   body { margin: 0; color: #263831; font: 15px system-ui, sans-serif }
   #editor { max-width: 900px }
   canvas { width: 100%; height: auto; display: block; border-radius: 6px; cursor: crosshair; touch-action: none }
+  canvas[hidden] { display: none }
   footer { display: flex; align-items: center; gap: 10px; padding: 8px 0; flex-wrap: wrap }
   button { background: white; border: 1px solid #87988f; border-radius: 5px; padding: 5px 12px; cursor: pointer }
   button:disabled { opacity: .5 }
   #status { color: var(--text, #263831) }
 </style>
 <div id="editor">
-  <canvas aria-label="Camera image for drawing section lines"></canvas>
-  <footer><button id="undo">Undo</button><button id="clear">Clear</button><span id="status" aria-live="polite"></span></footer>
+  <canvas hidden aria-label="Camera image for drawing section lines"></canvas>
+  <footer><button id="undo">Undo</button><button id="clear">Clear</button><span id="status" aria-live="polite">Loading camera image…</span></footer>
 </div>
 <script>
 const canvas = document.querySelector("canvas"), ctx = canvas.getContext("2d");
 const photo = new Image();
 let lines = [], start = null, hover = null, press = null, source = null;
+let pointMode = false, limit = Infinity, polygon = false;
 function send(type, fields = {}) {
   parent.postMessage({isStreamlitMessage: true, type: "streamlit:" + type, ...fields}, "*");
 }
@@ -35,9 +37,21 @@ function drawLine(a, b) {
 }
 function paint() {
   if (photo.complete && photo.naturalWidth) ctx.drawImage(photo,0,0,canvas.width,canvas.height);
-  for (const [a,b] of lines) drawLine(a,b);
+  if (pointMode) {
+    lines.forEach(([u,v],i) => {
+      if (polygon && i) drawLine(lines[i-1], lines[i]);
+      if (polygon && i === 3) drawLine(lines[i], lines[0]);
+    });
+    lines.forEach(([u,v],i) => {
+      const x=u*canvas.width, y=v*canvas.height;
+      ctx.fillStyle="#143536"; ctx.beginPath(); ctx.arc(x,y,9,0,2*Math.PI); ctx.fill();
+      ctx.font="bold 13px system-ui"; ctx.textAlign="center"; ctx.fillStyle="white";
+      ctx.fillText(String(i+1),x,y+4);
+    });
+  } else for (const [a,b] of lines) drawLine(a,b);
   if (start) drawLine(start,hover || start);
   document.querySelector("#status").textContent = start ? "Choose the second endpoint" : lines.length + (lines.length === 1 ? " line" : " lines");
+  if (pointMode) document.querySelector("#status").textContent = lines.length + " points selected";
   document.querySelector("#undo").disabled = document.querySelector("#clear").disabled = !start && !lines.length;
 }
 function point(e) {
@@ -51,7 +65,8 @@ function publish() {
   send("setComponentValue", {value: lines, dataType:"json"});
 }
 canvas.onpointerdown = e => {
-  if (!e.isPrimary || e.button !== 0) return;
+  if (canvas.hidden || !e.isPrimary || e.button !== 0) return;
+  if (pointMode) { if (lines.length < limit) { lines.push(point(e)); publish(); } return; }
   press = point(e); start ??= press; hover = press;
   canvas.setPointerCapture(e.pointerId); paint();
 };
@@ -64,15 +79,22 @@ canvas.onpointerup = e => {
 canvas.onpointercancel = () => { start = press = hover = null; paint(); };
 document.querySelector("#undo").onclick = () => { if (!start) lines.pop(); publish(); };
 document.querySelector("#clear").onclick = () => { lines = []; publish(); };
-photo.onload = () => { canvas.width = photo.naturalWidth; canvas.height = photo.naturalHeight; paint(); resize(); };
+photo.onload = () => { canvas.width = photo.naturalWidth; canvas.height = photo.naturalHeight; canvas.hidden = false; paint(); resize(); };
 window.addEventListener("message", e => {
   if (e.source !== parent || e.data.type !== "streamlit:render") return;
+  clearInterval(readyRetry);
   document.body.style.setProperty("--text", e.data.theme?.textColor || "#263831");
   const args = e.data.args;
+  pointMode = args.mode === "points";
+  limit = args.limit ?? Infinity; polygon = !!args.polygon;
+  canvas.setAttribute("aria-label",pointMode ? "Select "+(polygon ? "analysis corners" : "landmarks") : "Camera image for drawing section lines");
   if (source !== args.image) {
+    canvas.hidden = true;
     lines = args.initial || []; start = hover = press = null;
     source = args.image; photo.src = "data:image/jpeg;base64," + source;
   }
 });
-send("componentReady", {apiVersion:1});
+const announce = () => send("componentReady", {apiVersion:1});
+const readyRetry = setInterval(announce, 1000);
+announce();
 </script>

@@ -49,7 +49,7 @@ class VectorOverlay:
         self.palette = cv2.applyColorMap(np.arange(256,dtype=np.uint8)[:,None],
                                          cv2.COLORMAP_TURBO).reshape(-1,3)
 
-    def paint_flow(self, frame, vectors, maximum, sections, rows, cols):
+    def paint_flow(self, frame, vectors, maximum, sections, rows, cols, unit="m/s"):
         """Draw the rolling field and measured section-normal velocities."""
         output = frame.copy()
         height, width = frame.shape[:2]
@@ -100,7 +100,7 @@ class VectorOverlay:
             for color, thickness in [((20,20,20), 4), ((255,255,255), 1)]:
                 cv2.putText(output,label,(x+bar+6,y+5),cv2.FONT_HERSHEY_SIMPLEX,.65,color,thickness,cv2.LINE_AA)
         for color, thickness in [((20,20,20), 4), ((255,255,255), 1)]:
-            cv2.putText(output,"m/s",(x,bottom+24),cv2.FONT_HERSHEY_SIMPLEX,.65,color,thickness,cv2.LINE_AA)
+            cv2.putText(output,unit,(x,bottom+24),cv2.FONT_HERSHEY_SIMPLEX,.65,color,thickness,cv2.LINE_AA)
         return output
 
     def paint(self, frame, vx, vy, maximum):

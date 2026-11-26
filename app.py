@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 
 from acquisition import LOCAL, SAMPLE, digest, inspect_clip, save_content
 from analysis import analyze, survey
+from camera_setup import generate_setup
 
 st.set_page_config(page_title="River video measurements", layout="wide")
 st.title("River video measurements")
@@ -40,17 +41,24 @@ def main():
         names = sorted(p.name for p in sites.iterdir() if (p/"camera.json").is_file())
         if "saved_site" in st.session_state:
             st.session_state.camera_site = st.session_state.pop("saved_site")
-        site = st.selectbox("Camera setup", ["Choose a setup", "Ngwerere", *names, "Import a setup"], key="camera_site")
+        site = st.selectbox("Camera setup", ["Choose a setup", "Ngwerere", *names, "Create a setup", "Import a setup"], key="camera_site")
         if site == "Choose a setup":
+            st.page_link("pages/Live_heatmap.py", label="Try an MP4 without calibration (pixels per second)")
             st.image(image, width=640)
             return
-        if site == "Import a setup":
+        if site in {"Create a setup", "Import a setup"}:
+            if site == "Create a setup":
+                content = generate_setup(image, clip_id)
+            else:
+                camera = st.file_uploader("pyOpenRiverCam camera configuration", type="json")
+                content = camera.getvalue() if camera else None
+            if content is None:
+                return
             label = st.text_input("New site name")
-            camera = st.file_uploader("pyOpenRiverCam camera configuration", type="json")
-            if st.button("Save site") and camera:
-                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,59}",label) or label.casefold() in {"ngwerere","choose a setup","import a setup"}:
+            if st.button("Save site"):
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,59}",label) or label.casefold() in {"ngwerere","choose a setup","create a setup","import a setup"}:
                     raise ValueError("Choose a unique site name using letters, digits, spaces, underscores or hyphens.")
-                path = save_content(LOCAL/"imports",camera.getbuffer(),".json")
+                path = save_content(LOCAL/"imports",content,".json")
                 pyorc.load_camera_config(str(path))
                 (sites/label).mkdir(exist_ok=False)
                 (sites/label/"camera.json").write_bytes(path.read_bytes())
